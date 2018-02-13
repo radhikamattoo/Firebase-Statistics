@@ -6,7 +6,7 @@ This module using the [Firebase Admin SDK](https://firebase.google.com/docs/refe
 After cloning, download your service account credentials and replace this line with your own filepath:
 
 ```
-const serviceAccount = require("./universalgamemaker-firebase-adminsdk-mq0mr-47acf7e177.json");
+const serviceAccount = require("./<YOUR CREDENTIALS HERE>");
 
 ```  
 
