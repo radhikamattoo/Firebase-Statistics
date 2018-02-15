@@ -13,6 +13,7 @@
     "@google-cloud/storage": "^1.5.2",
     "child-process-promise": "^2.2.1",
     "firebase": "^4.9.1",
-    "firebase-admin": "^5.8.2"
+    "firebase-admin": "^5.8.2",
+    "imagemagick": "^0.1.3"
   }
 }

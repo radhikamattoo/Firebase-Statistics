@@ -1,133 +1,137 @@
 const admin = require("firebase-admin");
 const gcs = require('@google-cloud/storage')();
-const spawn = require('child-process-promise').spawn;
+// const spawn = require('child-process-promise').spawn;
+const imagemagick = require('imagemagick');
 const os = require('os');
 const path = require('path');
-const fs = require('fs');
+const realFs = require('fs');
+const fs = require('graceful-fs');
+fs.gracefulify(realFs);
+
 const serviceAccount = require("./credentials.json");
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://universalgamemaker.firebaseio.com",
   storageBucket: 'universalgamemaker.appspot.com'
 });
+
 const db = admin.database();
 const storage = admin.storage().bucket();
-
 const dbRef = db.ref("/gameBuilder");
-const outfile = "statistics.json";
-let json = {}; // "{Monopoly: { cloudStoragePath : ____, metadata: {originalSize:__, quality70:__, quality70:__} }"
 
-function getImageData(){
-  return dbRef.once("value").then((gameBuilder) => {
+
+const db_outfile = "database.json";
+const images_outfile = "image_data.json";
+let database_json = {};
+let statistics = {};
+
+// 1) download all images locally and also our entire db (as a json file)
+// 2) run image magic on all images locally using two quality levels (converting PNG to jpg, to measure what can be gained by that)
+// 3) do everything locally without needing to deal with promises at all :)
+
+// Game name |
+// Original size in KB |
+// Size for quality=70 without compressing PNGs |
+ // Size for quality=70 without compressing PNGs |
+ // Size for quality=70 with compressing PNGs as JPGs |
+ // Size for quality=70 with compressing PNGs as JPGs
+
+function downloadDatabase(){
+  dbRef.once("value", (gameBuilder) => {
     const specs = gameBuilder.child('gameSpecs');
     const elements = gameBuilder.child('elements');
     const images = gameBuilder.child('images');
-    specs.forEach((gameSpec) => {
-      const promises = [];
-       //for each gameSpec object get its image data
-      const elementIds = [];
-      const imageIds = [];
-      const gameName = gameSpec.child('gameName').val();
-      json[gameName] = {};
-      console.log("Game is: ", gameName);
-      const pieces = gameSpec.child('pieces');
-      // for each spec's piece, get its elementId
-      pieces.forEach((piece) => {
-        const elementId = piece.child('pieceElementId').val();
-        elementIds.push(elementId);
-      });
 
-      //for each elementId get its imageIDs
-      elementIds.forEach((elementId) =>{
-        const imageRefs = elements.child(elementId).child('images');
-        imageRefs.forEach((ref) =>{
-          imageIds.push( ref.child('imageId').val() );
-        });
-      });
-
-      ///for each imageId get its cloudStoragePath and perform conversions
-      imageIds.forEach((imageId) =>{
-        const isBoard = images.child(imageId).child('isBoardImage').val();
-        const cloudPath = images.child(imageId).child('cloudStoragePath').val(); //images/dog.jpg
-        const obj = {'cloudStoragePath' : cloudPath, 'metadata': {} };
-        json[gameName] = obj;
-        const JPEG_EXTENSION = '.jpg';
-        const filename = cloudPath.split("/")[1]; //dog.jpg
-        const file = filename.split(".")[0]; // dog
-        const extension = filename.split(".")[1];
-        const thumbFileName = file + JPEG_EXTENSION; // dog.jpg
-
-        // Temporary paths for images
-        const tempDir = os.tmpdir(); //tmp
-        const tempFilePath = path.join(tempDir, filename); // tmp/dog.jpg
-        const tempThumb = path.join(tempDir,  path.format( { name: file + "_thumb" , ext: JPEG_EXTENSION}) ); //tmp/dog_thumb.jpg
-        const temp50 = path.join(tempDir, path.format( { name: file + "_50" , ext: extension} )); // /tmp/dog_50.jpg
-        const temp70 = path.join(tempDir, path.format( { name: file + "_70" , ext: extension} )); // /tmp/dog_70.jpg
-
-        // Paths in GCS for upload
-        const filePath70 = path.join('images/quality70', filename);
-        const filePath50 = path.join('images/quality50', filename);
-        const thumbnailPath = path.join('images/thumbnail', thumbFileName);
-        const fileRef = storage.file(cloudPath);
-
-        // console.log("Resizing the image with path: ", cloudPath, ", name: ", filename, " and extension: ", extension);
-
-        let promise = fileRef.download({
-            destination: tempFilePath
-        }).then(() => {
-          json[gameName]['metadata']['original'] = getFileSize(tempFilePath);
-          // console.log('Image downloaded locally to', tempFilePath);
-          // console.log("Converting image to quality70");
-          return spawn('convert', [tempFilePath, '-quality', '70', temp70]);
-        }).then(() => {
-          json[gameName]['metadata']['quality70'] = getFileSize(temp70);
-          // console.log("Uploading quality70 image");
-          return storage.upload(temp70, { destination: filePath70 });
-        }).then(()=>{
-          // console.log("Converting image to quality50");
-          return spawn('convert', [tempFilePath, '-quality', '50', temp50]);
-        }).then(()=>{
-          json[gameName]['metadata']['quality50'] = getFileSize(temp70);
-          // console.log("Uploading quality50 image");
-          return storage.upload(temp50, { destination: filePath50});
-        }).then(()=>{
-          // console.log('Converting image to thumbnail');
-          return spawn('convert', [tempFilePath, '-thumbnail', '200x200>', tempThumb]);
-        }).then(()=>{
-          // console.log("Uploading thumbnail");
-          return storage.upload(tempThumb, { destination: thumbnailPath });
-        }).then(() =>{
-          // console.log("Unlinking temp files");
-          fs.unlinkSync(tempFilePath);
-          fs.unlinkSync(tempThumb);
-          fs.unlinkSync(temp70);
-          fs.unlinkSync(temp50);
-          return true;
-        }).catch(err =>{
-          return true;
-        });
-        return Promise.all([promise]);
-
-      }); //imageIds forEach
-    }); //specs forEach
-  }).catch(err =>{  //db .once
-    console.log(err);
-    return;
+    database_json["specs"] = specs.toJSON();
+    database_json["elements"] = elements.toJSON();
+    database_json["images"] = images.toJSON();
+    specs.forEach((spec) =>{
+      let json = spec.child('pieces').toJSON();
+      if(typeof json == "string"){ //it's a badly formatted array!
+        let array_obj = JSON.parse(database_json["specs"][spec.key]["pieces"]);
+        let build = {};
+        for(let i = 0; i < array_obj.length; i++){
+          build[i] = array_obj[i];
+        }
+        database_json["specs"][spec.key]["pieces"] = build;
+      }
+    });
+    fs.writeFileSync(db_outfile, JSON.stringify(database_json, null, 2));
+    console.log("Saved JSON to", outfile);
   });
 }
 
-// Taken from: https://gist.github.com/narainsagar/5cfd315ab38ba363191b63f8ae8b27db
-function getFileSize(filePath) {
-  var stats = fs.statSync(filePath);
-  // console.log('stats', stats);
-  var size = stats["size"];
-  // convert it to humanly readable format.
-  var i = Math.floor( Math.log(size) / Math.log(1024) );
-  return ( size / Math.pow(1024, i) ).toFixed(2) * 1 + ' ' + ['B', 'KB', 'MB', 'GB', 'TB'][i];
+function downloadImages(){
+  storage.getFiles(function(err, files){
+    files.forEach((file) =>{
+      file.download({
+        destination: file.name
+      },(err) =>{
+        console.log("Downloaded file to", file.name);
+      });
+    });
+  });
 }
 
-getImageData().then(() =>{
-  console.log(json);
-  fs.writeFileSync(outfile, JSON.stringify(json));
-  return admin.app().delete();
-})
+function getGameData(){
+  let game_data = {}; // {gameName: {board:___, nonBoard: [__,___]}}
+  const string = fs.readFileSync(db_outfile);
+  const obj = JSON.parse(string);
+
+  const specs = obj['specs'];
+  const images = obj['images'];
+  const elements = obj['elements'];
+
+  for(let specId in specs) {
+    const name = specs[specId]['gameName'];
+    const imageId = specs[specId]['board']['imageId'];
+    const imagePath = images[imageId]['cloudStoragePath'];
+
+    game_data[name] = {};
+    game_data[name]['board'] = {imagePath};
+    game_data[name]['nonboard'] = [];
+
+    const pieces = specs[specId]['pieces'];
+    for(let element in pieces){
+      const elementId = pieces[element]['pieceElementId'];
+      const image_set = elements[elementId]['images'];
+      for(let image in image_set){
+        const imageId = image_set[image]['imageId'];
+        const imgPath = images[imageId]['cloudStoragePath'];
+        game_data[name]['nonboard'].push(imgPath);
+      }
+    }
+  }
+  fs.writeFileSync(images_outfile, JSON.stringify(game_data, null, 2));
+  console.log("Wrote game image data to", images_outfile);
+}
+
+function resizeImages(gameNames, boardImages){
+  const extensions = ['.jpg', '.png', '.jpeg'];
+  const dir50 = "images/50";
+  const dir70 = "images/70";
+
+  fs.readdir('images', function(err, list){
+    list.forEach((file) => {
+      // BOARD IMAGES COMPRESSED AS JPGS
+      // NON-BOARD JPGS COMPRESSED
+      const ext = path.extname(file);
+      const name = path.basename(file, ext);
+      if(extensions.indexOf(ext) >= 0){
+        const filename50 = path.join()
+        // imagemagick.convert([file, ])
+      }
+    });
+  });
+}
+
+
+function main(){
+  // downloadDatabase();
+  // downloadImages();
+  getGameData();
+  // resizeImages(gameNames, boardImages);
+  // admin.app().delete();
+}
+
+main();
