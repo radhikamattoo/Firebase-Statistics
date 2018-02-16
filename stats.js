@@ -199,7 +199,7 @@ function main(){
   // downloadDatabase();
   // downloadImages();
   // getGameData();
-  generateStats();
+  // generateStats();
   // admin.app().delete();
 }
 
