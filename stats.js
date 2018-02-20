@@ -1,6 +1,5 @@
 const admin = require("firebase-admin");
 const gcs = require('@google-cloud/storage')();
-// const spawn = require('child-process-promise').spawn;
 const imagemagick = require('imagemagick');
 const os = require('os');
 const path = require('path');
@@ -8,7 +7,7 @@ const realFs = require('fs');
 const mkdirp = require('mkdirp');
 const fs = require('graceful-fs');
 fs.gracefulify(realFs);
-
+const Jimp = require("jimp");
 const serviceAccount = require("./credentials.json");
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -22,7 +21,7 @@ const dbRef = db.ref("/gameBuilder");
 
 const db_outfile = "database.json";
 const images_outfile = "image_data.json";
-
+const stats_outfile = "image_stats.json";
 // 1) download all images locally and also our entire db (as a json file)
 // 2) run image magic on all images locally using two quality levels (converting PNG to jpg, to measure what can be gained by that)
 // 3) do everything locally without needing to deal with promises at all :)
@@ -44,19 +43,20 @@ function downloadDatabase(){
     database_json["specs"] = specs.toJSON();
     database_json["elements"] = elements.toJSON();
     database_json["images"] = images.toJSON();
-    specs.forEach((spec) =>{
-      let json = spec.child('pieces').toJSON();
-      if(typeof json == "string"){ //it's a badly formatted array!
-        let array_obj = JSON.parse(database_json["specs"][spec.key]["pieces"]);
-        let build = {};
-        for(let i = 0; i < array_obj.length; i++){
-          build[i] = array_obj[i];
-        }
-        database_json["specs"][spec.key]["pieces"] = build;
-      }
-    });
+    // specs.forEach((spec) =>{
+      // let json = spec.child('pieces').toJSON();
+      // if(typeof json == "string"){ //it's a badly formatted array!
+        // console.log(json);
+        // let array_obj = JSON.parse(database_json["specs"][spec.key]["pieces"]);
+        // let build = {};
+        // for(let i = 0; i < array_obj.length; i++){
+        //   build[i] = array_obj[i];
+        // }
+        // database_json["specs"][spec.key]["pieces"] = build;
+      // }
+    // });
     fs.writeFileSync(db_outfile, JSON.stringify(database_json, null, 2));
-    console.log("Saved JSON to", outfile);
+    console.log("Saved JSON to", db_outfile);
   });
 }
 
@@ -106,21 +106,94 @@ function getGameData(){
   return game_data;
 }
 
+function convertBoardImage(board_file, board_ext){
+    let filename = path.basename(board_file, board_ext);
+    filename += ".jpg";
+    let outpath = "./images/boardToJPG/" + game.replace(/ /g, '');
+    let finalpath = path.join(outpath, filename);
+    mkdirp(outpath, (err) =>{
+      if(err) throw err;
+      imagemagick.convert([board_file, finalpath], (err, stdout) =>{
+        if (err) throw err;
+        console.log("Converted image");
+      });
+    });
+}
+
+function convertNonBoardImages(nonboard_files, destination_path, quality, promises, compress, game){
+  const allowed = ['.jpg', '.jpeg', '.png'];
+
+  for(let i = 0; i < nonboard_files.length; i++){
+    const file = nonboard_files[i];
+    const ext = path.extname(file);
+
+    if(allowed.indexOf(ext) >= 0){
+
+      if(compress){ //Force convert to .jpg
+        filename = path.basename(file, ext);
+        filename += '.jpg';
+      }else{
+        filename = path.basename(file);
+      }
+
+      let outpath = destination_path + game.replace(/ /g, '');
+      let finalpath = path.join(outpath, filename);
+
+      promises.push(Jimp.read(file).then((img) =>{
+        return img.quality(quality).write(finalpath);
+      }).catch((err) =>{
+        return err;
+      }));
+    } //if
+  } //for loop
+
+}
+
+function getGameSize(board_file, board_ext, nonboard_files, game, destination_path){
+  const allowed = ['.jpg', '.jpeg', '.png'];
+  let size_sum = 0;
+  for(let i = 0; i < nonboard_files.length; i++){
+      const file = nonboard_files[i];
+      const ext = path.extname(file);
+      if(allowed.indexOf(ext) >= 0){
+        let filename = path.basename(file);
+        let outpath = destination_path + game.replace(/ /g, '');
+        let finalpath = path.join(outpath, filename);
+        size_sum += getFilesizeInBytes(finalpath);
+      }
+  }
+  // add new or old board image
+  if(board_ext != '.jpg'){
+    // add newly generated image
+    let filename = path.basename(board_file, board_ext);
+    filename += ".jpg";
+    let outpath = "./images/boardToJPG/" + game.replace(/ /g, '');
+    let finalpath = path.join(outpath, filename);
+    size_sum += getFilesizeInBytes(finalpath);
+  }else{
+    // add old image
+    size_sum += getFilesizeInBytes(board_file);
+  }
+  return bytesToSize(size_sum);
+}
+
 function generateStats(){
-  let stats = {}; //{gameName: {original : ___, }}
+  let stats = {}; //{gameName: {original : ___, q70_uncompressed:_____, q70_compressed:____, q50_uncompressed:____, q50_compressed:____}}
   const extensions = ['.jpg', '.png', '.jpeg'];
   const dir50 = "images/50";
   const dir70 = "images/70";
   const str = fs.readFileSync(images_outfile);
   const game_data = JSON.parse(str);
+  const promises = [];
 
   for (let game in game_data) {
     if (game_data.hasOwnProperty(game)) {
       const data = game_data[game];
       const board_file = data['board'];
       const nonboard_files = data['nonboard'];
+      const board_ext = path.extname(board_file);
 
-      // original summed size
+      // ORIGINAL SUMMED SIZE
       let size_sum = 0;
       let size = getFilesizeInBytes(board_file);
       size_sum += size;
@@ -131,54 +204,60 @@ function generateStats(){
       stats[game] = {};
       stats[game]['original'] = bytesToSize(size_sum);
 
-      size_sum = 0;
-
-      // convert board to JPG if it isn't a JPG already
-      if(path.extname(board_file) != ".jpg"){
-        const ext = path.extname(board_file);
-        let filename = path.basename(board_file, ext);
-        filename += ".jpg";
-        let outpath = "./images/boardToJPG/" + game.replace(/ /g, '');
-        let finalpath = path.join(outpath, filename);
-        mkdirp(outpath, (err) =>{
-          if(err) throw err;
-          imagemagick.convert([board_file, finalpath], (err, stdout) =>{
-            if (err) throw err;
-            console.log("Converted image");
-          });
-        });
+      if(board_ext != ".jpg"){
+        convertBoardImage(board_file, board_ext);
       }
 
+      console.log("Converting images for", game);
       // convert non-board images to q70
-      for(let i = 0; i < nonboard_files.length; i++){
-        const file = nonboard_files[i];
-        let filename = path.basename(file);
-        let outpath = "./images/q70/uncompressed/" + game.replace(/ /g, '');
-        let finalpath = path.join(outpath, filename);
-        mkdirp(outpath, (err) => {
-          if(err) throw err;
-          imagemagick.convert([file, '-quality', '70', finalpath], (err, stdout) =>{
-            if (err) throw err;
-            else{
-              console.log("Converted image", i);
-            }
-          });
-        });
-      }
-        // find the sum of all new file sizes
+      let quality = 70;
+      let compress = false;
+      let destination_path = "./images/q70/uncompressed/";
+      // convertNonBoardImages(nonboard_files, destination_path , quality, promises, compress);
+
+      // compress non-board images to q70
+      compress = true;
+      destination_path = "./images/q70/compressed/";
+      convertNonBoardImages(nonboard_files, destination_path, quality, promises, compress, game);
+
+      // compress non-board images to q50
+      quality = 50;
+      destination_path = "./images/q50/compressed/";
+      convertNonBoardImages(nonboard_files, destination_path, quality, promises, compress, game);
+
       // convert non-board images to q50
-        // find the sum of all new file sizes
-
-      // convert non-board images to JPG with q70
-        // find the sum of all new file sizes
-
-      // convert non-board images to JPG with q50
-        // find the sum of all new file sizes
-        // process.exit(0);
-
+      compress = false;
+      destination_path = "./images/q50/uncompressed/";
+      convertNonBoardImages(nonboard_files, destination_path, quality, promises, compress, game);
 
     }
-  }
+  } //game for each
+
+  Promise.all(promises).then(() =>{
+    console.log("Finished all file conversions!");
+    for (let game in game_data) {
+      if (game_data.hasOwnProperty(game)) {
+        const data = game_data[game];
+        const board_file = data['board'];
+        const nonboard_files = data['nonboard'];
+        const board_ext = path.extname(board_file);
+
+        stats[game]['q70_uncompressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q70/uncompressed/");
+        stats[game]['q50_uncompressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q50/uncompressed/");
+        stats[game]['q70_compressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q70/compressed/");
+        stats[game]['q50_compressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q50/compressed/");
+
+      }
+    }
+    // write json file
+    console.log("Writing statistics to file");
+    fs.writeFileSync(stats_outfile, JSON.stringify(stats, null, 2));
+    return admin.app().delete();
+  }).catch((err) =>{
+    console.log("Error: ");
+    console.log(err);
+    return admin.app().delete();
+  });
 
 }
 // Taken from: https://techoverflow.net/2012/09/16/how-to-get-filesize-in-node-js/
@@ -199,7 +278,7 @@ function main(){
   // downloadDatabase();
   // downloadImages();
   // getGameData();
-  // generateStats();
+  generateStats();
   // admin.app().delete();
 }
 
