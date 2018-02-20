@@ -22,9 +22,6 @@ const dbRef = db.ref("/gameBuilder");
 const db_outfile = "database.json";
 const images_outfile = "image_data.json";
 const stats_outfile = "image_stats.json";
-// 1) download all images locally and also our entire db (as a json file)
-// 2) run image magic on all images locally using two quality levels (converting PNG to jpg, to measure what can be gained by that)
-// 3) do everything locally without needing to deal with promises at all :)
 
 // Game name |
 // Original size in KB |
@@ -43,18 +40,18 @@ function downloadDatabase(){
     database_json["specs"] = specs.toJSON();
     database_json["elements"] = elements.toJSON();
     database_json["images"] = images.toJSON();
-    // specs.forEach((spec) =>{
-      // let json = spec.child('pieces').toJSON();
-      // if(typeof json == "string"){ //it's a badly formatted array!
-        // console.log(json);
-        // let array_obj = JSON.parse(database_json["specs"][spec.key]["pieces"]);
-        // let build = {};
-        // for(let i = 0; i < array_obj.length; i++){
-        //   build[i] = array_obj[i];
-        // }
-        // database_json["specs"][spec.key]["pieces"] = build;
-      // }
-    // });
+    specs.forEach((spec) =>{
+      let json = spec.child('pieces').toJSON();
+      if(typeof json == "string"){ //it's a badly formatted array!
+        console.log(json);
+        let array_obj = JSON.parse(database_json["specs"][spec.key]["pieces"]);
+        let build = {};
+        for(let i = 0; i < array_obj.length; i++){
+          build[i] = array_obj[i];
+        }
+        database_json["specs"][spec.key]["pieces"] = build;
+      }
+    });
     fs.writeFileSync(db_outfile, JSON.stringify(database_json, null, 2));
     console.log("Saved JSON to", db_outfile);
   });
@@ -208,12 +205,11 @@ function generateStats(){
         convertBoardImage(board_file, board_ext);
       }
 
-      console.log("Converting images for", game);
       // convert non-board images to q70
       let quality = 70;
       let compress = false;
       let destination_path = "./images/q70/uncompressed/";
-      // convertNonBoardImages(nonboard_files, destination_path , quality, promises, compress);
+      convertNonBoardImages(nonboard_files, destination_path , quality, promises, compress);
 
       // compress non-board images to q70
       compress = true;
@@ -232,7 +228,7 @@ function generateStats(){
 
     }
   } //game for each
-
+  console.log("Waiting for file conversions to finish...");
   Promise.all(promises).then(() =>{
     console.log("Finished all file conversions!");
     for (let game in game_data) {
@@ -279,7 +275,6 @@ function main(){
   // downloadImages();
   // getGameData();
   generateStats();
-  // admin.app().delete();
 }
 
 main();
