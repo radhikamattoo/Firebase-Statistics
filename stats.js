@@ -26,9 +26,9 @@ const stats_outfile = "image_stats.json";
 // Game name |
 // Original size in KB |
 // Size for quality=70 without compressing PNGs |
- // Size for quality=70 without compressing PNGs |
- // Size for quality=70 with compressing PNGs as JPGs |
- // Size for quality=70 with compressing PNGs as JPGs
+// Size for quality=70 without compressing PNGs |
+// Size for quality=70 with compressing PNGs as JPGs |
+// Size for quality=70 with compressing PNGs as JPGs
 
 function downloadDatabase(){
   let database_json = {};
@@ -146,14 +146,20 @@ function convertNonBoardImages(nonboard_files, destination_path, quality, promis
 
 }
 
-function getGameSize(board_file, board_ext, nonboard_files, game, destination_path){
+function getGameSize(board_file, board_ext, nonboard_files, game, destination_path, compress){
   const allowed = ['.jpg', '.jpeg', '.png'];
   let size_sum = 0;
   for(let i = 0; i < nonboard_files.length; i++){
       const file = nonboard_files[i];
       const ext = path.extname(file);
       if(allowed.indexOf(ext) >= 0){
-        let filename = path.basename(file);
+        let filename;
+        if(compress){ //must be .jpg file
+          filename = path.basename(file, ext);
+          filename += '.jpg';
+        }else{
+          filename = path.basename(file);
+        }
         let outpath = destination_path + game.replace(/ /g, '');
         let finalpath = path.join(outpath, filename);
         size_sum += getFilesizeInBytes(finalpath);
@@ -237,11 +243,15 @@ function generateStats(){
         const board_file = data['board'];
         const nonboard_files = data['nonboard'];
         const board_ext = path.extname(board_file);
+        let compress = false;
 
-        stats[game]['q70_uncompressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q70/uncompressed/");
-        stats[game]['q50_uncompressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q50/uncompressed/");
-        stats[game]['q70_compressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q70/compressed/");
-        stats[game]['q50_compressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q50/compressed/");
+        stats[game]['q70_uncompressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q70/uncompressed/", compress);
+        stats[game]['q50_uncompressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q50/uncompressed/", compress);
+
+        compress = true;
+
+        stats[game]['q70_compressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q70/compressed/", compress);
+        stats[game]['q50_compressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q50/compressed/", compress);
 
       }
     }
@@ -256,12 +266,14 @@ function generateStats(){
   });
 
 }
+
 // Taken from: https://techoverflow.net/2012/09/16/how-to-get-filesize-in-node-js/
 function getFilesizeInBytes(filename) {
     const stats = fs.statSync(filename);
     const fileSizeInBytes = stats.size;
     return fileSizeInBytes;
 }
+
 // Taken from: https://stackoverflow.com/questions/15900485/correct-way-to-convert-size-in-bytes-to-kb-mb-gb-in-javascript
 function bytesToSize(bytes) {
    var sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
@@ -274,7 +286,7 @@ function main(){
   // downloadDatabase();
   // downloadImages();
   // getGameData();
-  generateStats();
+  // generateStats();
 }
 
 main();
