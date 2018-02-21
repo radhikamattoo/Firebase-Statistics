@@ -188,7 +188,7 @@ function generateStats(){
   const str = fs.readFileSync(images_outfile);
   const game_data = JSON.parse(str);
   const promises = [];
-
+  let count = 0;
   for (let game in game_data) {
     if (game_data.hasOwnProperty(game)) {
       const data = game_data[game];
@@ -204,8 +204,9 @@ function generateStats(){
         let filename = nonboard_files[i];
         size_sum += getFilesizeInBytes(filename);
       }
-      stats[game] = {};
-      stats[game]['original'] = bytesToSize(size_sum);
+      stats[count] = {};
+      stats[count]['game'] = game;
+      stats[count]['original'] = bytesToSize(size_sum);
 
       if(board_ext != ".jpg"){
         convertBoardImage(board_file, board_ext);
@@ -231,12 +232,15 @@ function generateStats(){
       compress = false;
       destination_path = "./images/q50/uncompressed/";
       convertNonBoardImages(nonboard_files, destination_path, quality, promises, compress, game);
+      count += 1;
 
     }
   } //game for each
+
   console.log("Waiting for file conversions to finish...");
   Promise.all(promises).then(() =>{
     console.log("Finished all file conversions!");
+    let count = 0;
     for (let game in game_data) {
       if (game_data.hasOwnProperty(game)) {
         const data = game_data[game];
@@ -245,14 +249,14 @@ function generateStats(){
         const board_ext = path.extname(board_file);
         let compress = false;
 
-        stats[game]['q70_uncompressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q70/uncompressed/", compress);
-        stats[game]['q50_uncompressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q50/uncompressed/", compress);
+        stats[count]['q70_uncompressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q70/uncompressed/", compress);
+        stats[count]['q50_uncompressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q50/uncompressed/", compress);
 
         compress = true;
 
-        stats[game]['q70_compressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q70/compressed/", compress);
-        stats[game]['q50_compressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q50/compressed/", compress);
-
+        stats[count]['q70_compressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q70/compressed/", compress);
+        stats[count]['q50_compressed'] = getGameSize(board_file, board_ext, nonboard_files, game, "./images/q50/compressed/", compress);
+        count += 1;
       }
     }
     // write json file
@@ -286,7 +290,7 @@ function main(){
   // downloadDatabase();
   // downloadImages();
   // getGameData();
-  // generateStats();
+  generateStats();
 }
 
 main();
